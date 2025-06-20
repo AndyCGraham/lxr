@@ -1,0 +1,283 @@
+---
+title: "ImagingAnalysis"
+author: "Andy Graham"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Load packages
+library(dplyr)
+library(ggplot2)
+library(ggprism)
+library(rstatix)
+library(ggtext)
+
+#Set random seed
+set.seed(123)
+
+cb_pallette = ggprism_data$fill_palettes$colorblind_safe
+cb_pallette = c(cb_pallette[1], "#E4E1E3FF", cb_pallette[2:length(cb_pallette)])
+```
+
+```{r}
+dir.create("../plots/")
+dir.create("../plots/ARM/")
+```
+
+# ARM
+
+## Assess if levels of ARM correlate to Age
+
+```{r}
+# Load results
+results <- purrr::map(list.files("../data/imaging/ARM/Gal3/", pattern="results.txt", recursive = T, full.names = T) , \(Exp) read.delim(paste0(Exp))) |>
+ purrr::list_rbind() %>% 
+ dplyr::mutate(X.0.Image = toupper(X.0.Image)) %>% # Capitalise all names
+ dplyr::mutate(X.0.Image = gsub("\\s*\\([^\\)]+\\)","",as.character(X.0.Image)) %>% #Remove annotations in brackets from image name
+ dplyr::mutate(X.0.Image = gsub('(.*)_\\w+', '\\1', X.0.Image)) %>% #Remove annotations in brackets from image name
+ dplyr::mutate(X.0.Image = gsub('.CZI', '', X.0.Image)) %>% # Remove suffixes
+ dplyr::filter(!grepl("NOGAL", X.0.Image)) %>% # Remove controls
+                group_by(X.0.Image) %>% # Average results per sample
+  summarise(TotalCounts=sum(Object.Count,na.rm = T), TotalArea=sum(ROI.Size,na.rm = T), AverageDensity = mean(Density,na.rm = T),
+            .groups = 'drop', num_of_rep = n()) 
+
+#Use image names to assign ages to samples
+results$Age = ifelse(grepl("^Y", results$X.0.Image), 5, 
+              ifelse(grepl("C2|C6|^4|^5", results$X.0.Image), 5, 
+              ifelse(grepl("^12|^13", results$X.0.Image), 13,
+              ifelse(grepl("^15", results$X.0.Image), 13,
+              ifelse(grepl("^A2", results$X.0.Image), 18,
+              ifelse(grepl("^18|19", results$X.0.Image), 18,
+              ifelse(grepl("^21", results$X.0.Image), 18,
+              ifelse(grepl("^A1", results$X.0.Image), 25,
+              ifelse(grepl("^24|^25|^C1|^C3|^C5|^C8", results$X.0.Image), 25,
+                    NA) ) ) ) ) ) ) ) )
+
+results$Batch = ifelse(grepl("^Y|^A", results$X.0.Image), "Sh", 
+              ifelse(grepl("^C", results$X.0.Image), "GW", 
+              ifelse(grepl("^1|^2|^4", results$X.0.Image), "TL",
+                    NA) ) ) 
+
+## ANOVA and T Tests
+
+results = results %>%
+  dplyr::filter(Batch %in% c("TL", "Sh"),
+                !is.na(results$Age)) %>%
+  dplyr::mutate(Age = factor(Age))
+
+ANOVA = results %>%
+   rstatix::anova_test(AverageDensity ~ Age+batch)
+df_p_val = results %>% rstatix::pairwise_t_test(AverageDensity ~ Age, ref.group = "5", p.adjust.method = "BH",pool.sd=T) %>% 
+  rstatix::add_xy_position() %>% dplyr::mutate(y.position = y.position - 3) %>%
+  dplyr::filter(p.adj > 0.05)
+
+# Plot
+ggplot(results, aes(x = Age, y = AverageDensity)) + 
+  geom_bar(  stat="summary", aes(fill=Age)) +
+  geom_errorbar( stat='summary', aes(width=0.4, colour="lightblue")) + geom_hline(yintercept=0, colour = "lightblue", linetype = 'dotted') +
+  geom_point(aes(colour = "lightblue"), position=position_jitterdodge(jitter.width = 0.25), size=2.5, alpha=1) + 
+  ylab(bquote("#IBA1+ve/Gal3+ve Cells/mm"^2)) + xlab("Age") +
+  ggprism::theme_prism(palette = "colorblind_safe") + scale_fill_manual(values=cb_pallette[1:4]) + 
+  theme(legend.position = "none") +
+  add_pvalue(df_p_val, 
+               label = "{p.adj.signif}",
+                   remove.bracket = F, label.size = 7.5) + ylim(-0.5, 8)
+
+ggsave("../plots/imaging/ARM/GAL3-Age_densityBox.jpg", device = "jpeg", height = 5, width = 6.5)
+```
+
+
+## Double check that using CD74 to mark ARM rather than Gal3
+
+```{r}
+# Load images
+results <- purrr::map(list.files("../data/imaging/ARM/cd74/", pattern="results.txt", recursive = T, full.names = T) , \(Exp) read.delim(paste0(Exp))) |>
+ purrr::list_rbind() %>% 
+ mutate(X.0.Image = toupper(X.0.Image)) %>% # Capitalise all names
+ mutate(X.0.Image = gsub("\\s*\\([^\\)]+\\)","",as.character(X.0.Image)) %>% #Remove annotations in brackets from image name
+ mutate(X.0.Image = gsub('(.*)_\\w+', '\\1', X.0.Image)) #Remove annotations in brackets from image name
+
+#Remove images with underscore in the name (controls)
+if(any(grepl("NOCD74", results$X.0.Image))){
+  results = results[-grep("NOCD74", results$X.0.Image),]
+}
+
+#Average results per sample
+results = results %>% group_by(X.0.Image) %>% 
+  summarise(TotalCounts=sum(Object.Count,na.rm = T), TotalArea=sum(ROI.Size,na.rm = T), AverageDensity = mean(Density,na.rm = T), num_of_rep = n(), .groups = 'drop')
+results$X.0.Image = toupper(results$X.0.Image)
+
+#Use image names to assign ages to samples
+results$X.0.Image = toupper(results$X.0.Image)
+results$Age = ifelse(grepl("^Y", results$X.0.Image), 3, 
+              ifelse(grepl("C2|C6|^4|^5", results$X.0.Image), 5, 
+              ifelse(grepl("^12|^13", results$X.0.Image), 13,
+              ifelse(grepl("^15", results$X.0.Image), 13,
+              ifelse(grepl("^A2", results$X.0.Image), 18,
+              ifelse(grepl("^18|19", results$X.0.Image), 18,
+              ifelse(grepl("^21", results$X.0.Image), 18,
+              ifelse(grepl("^A1", results$X.0.Image), 25,
+              ifelse(grepl("^24|^25|^C1|^C3|^C5|^C8|^CX|^CTR", results$X.0.Image), 25,
+                    NA) ) ) ) ) ) ) ) )
+results$Age = factor(results$Age, levels = c("3", "25"))
+
+#Use rstatix to get pval dataframe
+df_p_val = results %>% rstatix::t_test(AverageDensity ~ Age, var.equal = T) %>% 
+  rstatix::add_xy_position()
+df_p_val$p = ifelse(df_p_val$p < 0.05, "*", "ns")
+
+# Plot
+ggplot(results, aes(x = Age, y = AverageDensity)) + 
+  geom_bar(  stat="summary", aes(fill=Age)) +
+  geom_errorbar( stat='summary', aes(width=0.4, colour="lightblue")) + geom_hline(yintercept=0, colour = "lightblue", linetype = 'dotted') +
+  geom_point(aes(colour = "lightblue"), position=position_jitterdodge(jitter.width = 0.25), size=2.5, alpha=1) + 
+  ylab(bquote("#IBA1+ve/CD74+ve Cells/mm"^2)) + xlab("Age") +
+  ggprism::theme_prism(palette = "colorblind_safe") + scale_fill_manual(values=cb_pallette[1:4]) + 
+  theme(legend.position = "none") +
+  add_pvalue(df_p_val, 
+               label = "{p}",
+                   remove.bracket = F, label.size = 7.5) + ylim(-0.5, 6)
+ggsave("../plots/imaging/ARM/CD74-Age_densityBox.jpg", device = "jpeg", height = 3.5, width = 5)
+```
+
+## Assess if levels of ARM correlate to cognition or are affected by treatment - OLM Exp1 (2 Weeks GW Treatment)
+
+```{r}
+results <- purrr::map(list.files("../data/imaging/ARM/Gal3/", pattern="results.txt", recursive = T, full.names = T) , \(Exp) read.delim(paste0(Exp))) |>
+ purrr::list_rbind() %>% 
+ dplyr::mutate(X.0.Image = toupper(X.0.Image)) %>% # Capitalise all names
+ dplyr::mutate(X.0.Image = gsub("\\s*\\([^\\)]+\\)","",as.character(X.0.Image)) %>% #Remove annotations in brackets from image name
+ dplyr::mutate(X.0.Image = gsub('(.*)_\\w+', '\\1', X.0.Image)) %>% #Remove annotations in brackets from image name
+ dplyr::mutate(X.0.Image = gsub('.CZI', '', X.0.Image)) %>% # Remove suffixes
+ dplyr::filter(grep("^1|^2|^3|^6|^7|^8|^9", X.0.Image)) %>% #Get only aged GW2 samples
+ dplyr::filter(!grepl("^11|^10|^13|^19|^21", X.0.Image),
+                !grepl("NOGAL", X.0.Image)) %>% # Remove controls
+                group_by(X.0.Image) %>% # Average results per sample
+  summarise(TotalCounts=sum(Object.Count,na.rm = T), TotalArea=sum(ROI.Size,na.rm = T), AverageDensity = mean(Density,na.rm = T),
+            .groups = 'drop', num_of_rep = n()) 
+
+#Join with OLM results
+OLM = read.csv("../data/behaviour/results/OLM/manualResults_shail.csv") %>%
+  dplyr::select(1:4) %>%
+  dplyr::rename(c("Young Control", "Young GW3965", "Aged Control", "Aged GW3965")) %>%
+  tidyr::gather(Group, DI, 1:4, factor_key=TRUE) %>%
+  dplyr::mutate(ID = 
+  toupper(c("10a", "10b", "10c", "10d", "10e", "11a", "11b", "11c", "11d", "11e", 
+            "C2T1", "C2T2", "C2T3", "C6T1", "C6T2", "C6T3", "C6T4", "C6T5",
+    "4a", "4b", "4c", "4d", "4e", "5a", "5b", "5c", "5d", "5e", 
+    "C4T1", "C4T2", "C4T3", "C4T1", "C7T2", "C7T3", "C7T4", "C7T5",
+     "6a", "6b", "6c", "6d", "7a", "7b", "7c", "7d", "8a", "9a",
+    "C3T1", "C3T2", "C3T3", "C8T1", "C8T2", "C8T3", "C8T4", "C8T5",
+    "1a", "1b", "1c", "1d", "2a", "2b", "2c", "2d", "3c", "3b"   
+    ,"C1T1", "C1T2", "C1T3", "C1T4", "C5T1", "C5T2", "C5T3", "C5T4"
+    ))) %>%
+    dplyr::filter(!is.na(OLM$DI)) %>%
+  dplyr::mutate(TreatAge = factor(Group, levels = c("Young Control", "Young GW3965","Aged Control", "Aged GW3965"))) %>%
+  tidyr::separate(Group, into = c("Age", "Treatment"), sep = " ")
+
+CombinedResults = results %>% inner_join(OLM, by = c("X.0.Image" = "ID"))
+
+#Assess correlation of ARM density to OLM DI
+cor = cor.test(CombinedResults[CombinedResults$Treatment == "GW3965",]$AverageDensity, CombinedResults[CombinedResults$Treatment == "GW3965",]$DI)
+print(cor)
+
+# Plot
+ggplot(data = CombinedResults[CombinedResults$Treatment == "GW3965",], aes(x = AverageDensity, y = DI)) + 
+  geom_point(position = "jitter") + 
+  # prediction line
+  geom_smooth(method = "lm") + xlab(bquote("#IBA1+ve/GAL3+ve Cells/mm"^2)) + ylab(bquote("OLM Discrimination Index")) +
+  annotate("text", x = min(CombinedResults$AverageDensity)+1, y = max(CombinedResults$DI)-0.1, label = paste0("p =", signif(cor$p.value), " \n", "\u03C4 = ", round(cor$estimate, 3))) + ggprism::theme_prism()
+
+# T Test
+df_p_val = CombinedResults %>%
+   rstatix::t_test(AverageDensity ~ Treatment) %>% 
+   rstatix::add_xy_position() %>%
+   dplyr::filter(p < 0.05) %>%
+   dplyr::mutate(p = ifelse(p < 0.05, "*", "ns"))
+
+# Plot
+ggplot(data = CombinedResults, aes(x = Treatment, y = AverageDensity)) + 
+  geom_bar(  stat="summary", aes(fill=Treatment)) +
+  geom_errorbar( stat='summary', aes(width=0.4, colour="lightblue")) +
+  geom_point(aes(colour = "lightblue"), position=position_jitterdodge(jitter.width = 0.25), size=2.5, alpha=1) + 
+  ylab(bquote("#IBA1+ve/Gal3+ve Cells/mm"^2)) + xlab("Treatment") +
+  ggprism::theme_prism(palette = "colorblind_safe") + scale_fill_manual(values=cb_pallette[c(2,1)]) + 
+  theme(legend.position = "none") +
+  add_pvalue(df_p_val, 
+               label = "{p}",
+                   remove.bracket = F, label.size = 7.5) + ylim(NA, 7)
+ggsave("../plots/imaging/ARM/TreatmentvsARM_densityBar_GW1.jpg", device = "jpeg", height = 3.5, width = 3.5)
+```
+
+## Assess if levels of ARM correlate to cognition or are affected by treatment - OLM Exp 2 (4 weeks treatment)
+
+```{r}
+# Load data
+results <- purrr::map(list.files("../data/imaging/ARM/Gal3/GW2/", pattern="results.txt", recursive = T, full.names = T) , \(Exp) read.delim(paste0(Exp))) |>
+ purrr::list_rbind() %>% 
+ dplyr::mutate(X.0.Image = toupper(X.0.Image)) %>% # Capitalise all names
+ dplyr::mutate(X.0.Image = gsub("\\s*\\([^\\)]+\\)","",as.character(X.0.Image)) %>% #Remove annotations in brackets from image name
+ dplyr::mutate(X.0.Image = gsub('(.*)_\\w+', '\\1', X.0.Image)) %>% #Remove annotations in brackets from image name
+ dplyr::mutate(X.0.Image = gsub('.CZI', '', X.0.Image)) %>% # Remove suffixes
+ dplyr::filter(grep("^C1|^C3|^C5|^C8|^1|^2|^3|^6|^7|^8|^9", X.0.Image)) %>% #Get only aged GW samples
+ dplyr::filter(!grepl("^11|^10|^13|^19|^21", X.0.Image),
+                !grepl("NOGAL", X.0.Image)) %>% # Remove controls
+                group_by(X.0.Image) %>% # Average results per sample
+  summarise(TotalCounts=sum(Object.Count,na.rm = T), TotalArea=sum(ROI.Size,na.rm = T), AverageDensity = mean(Density,na.rm = T),
+            .groups = 'drop', num_of_rep = n()) 
+
+#Join with OLM results
+OLM = read.csv("../data/behaviour/results/OLM/manualResults_shail.csv") %>%
+  dplyr::select(1:4) %>%
+  dplyr::rename(c("Young Control", "Young GW3965", "Aged Control", "Aged GW3965")) %>%
+  tidyr::gather(Group, DI, 1:4, factor_key=TRUE) %>%
+  dplyr::mutate(ID = 
+  toupper(c("10a", "10b", "10c", "10d", "10e", "11a", "11b", "11c", "11d", "11e", 
+            "C2T1", "C2T2", "C2T3", "C6T1", "C6T2", "C6T3", "C6T4", "C6T5",
+    "4a", "4b", "4c", "4d", "4e", "5a", "5b", "5c", "5d", "5e", 
+    "C4T1", "C4T2", "C4T3", "C4T1", "C7T2", "C7T3", "C7T4", "C7T5",
+     "6a", "6b", "6c", "6d", "7a", "7b", "7c", "7d", "8a", "9a",
+    "C3T1", "C3T2", "C3T3", "C8T1", "C8T2", "C8T3", "C8T4", "C8T5",
+    "1a", "1b", "1c", "1d", "2a", "2b", "2c", "2d", "3c", "3b"   
+    ,"C1T1", "C1T2", "C1T3", "C1T4", "C5T1", "C5T2", "C5T3", "C5T4"
+    ))) %>%
+    dplyr::filter(!is.na(OLM$DI)) %>%
+  dplyr::mutate(TreatAge = factor(Group, levels = c("Young Control", "Young GW3965","Aged Control", "Aged GW3965"))) %>%
+  tidyr::separate(Group, into = c("Age", "Treatment"), sep = " ")
+
+CombinedResults = results %>% inner_join(OLM, by = c("X.0.Image" = "ID"))
+
+#Assess correlation of ARM density to OLM DI
+cor = cor.test(CombinedResults[CombinedResults$Treatment == "GW3965",]$AverageDensity, CombinedResults[CombinedResults$Treatment == "GW3965",]$DI)
+print(cor)
+
+# Plot
+ggplot(data = CombinedResults[CombinedResults$Treatment == "GW3965",], aes(x = AverageDensity, y = DI)) + 
+  geom_point(position = "jitter") + 
+  # prediction line
+  geom_smooth(method = "lm") + xlab(bquote("#IBA1+ve/GAL3+ve Cells/mm"^2)) + ylab(bquote("OLM Discrimination Index")) +
+  annotate("text", x = min(CombinedResults$AverageDensity)+1, y = max(CombinedResults$DI)-0.1, label = paste0("p =", signif(cor$p.value), " \n", "\u03C4 = ", round(cor$estimate, 3))) + ggprism::theme_prism()
+
+# T Test
+df_p_val = CombinedResults %>%
+   rstatix::t_test(AverageDensity ~ Treatment) %>% 
+   rstatix::add_xy_position() %>%
+   dplyr::filter(p < 0.05) %>%
+   dplyr::mutate(p = ifelse(p < 0.05, "*", "ns"))
+
+# Plot
+ggplot(data = CombinedResults, aes(x = Treatment, y = AverageDensity)) + 
+  geom_bar(  stat="summary", aes(fill=Treatment)) +
+  geom_errorbar( stat='summary', aes(width=0.4, colour="lightblue")) +
+  geom_point(aes(colour = "lightblue"), position=position_jitterdodge(jitter.width = 0.25), size=2.5, alpha=1) + 
+  ylab(bquote("#IBA1+ve/Gal3+ve Cells/mm"^2)) + xlab("Treatment") +
+  ggprism::theme_prism(palette = "colorblind_safe") + scale_fill_manual(values=cb_pallette[c(2,1)]) + 
+  theme(legend.position = "none") +
+  add_pvalue(df_p_val, 
+               label = "{p}",
+                   remove.bracket = F, label.size = 7.5) + ylim(NA, 7)
+ggsave("../plots/ARM/TreatmentvsARM_densityBar_GW2.jpg", device = "jpeg", height = 3.5, width = 3.5)
+```

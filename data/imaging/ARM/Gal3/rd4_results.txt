@@ -1,0 +1,2 @@
+~0~Image	ROI Size	Object Count	Density
+25B.CZI	3626058.22	16	4.4125
